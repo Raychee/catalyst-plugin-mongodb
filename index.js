@@ -1,40 +1,23 @@
 const {MongoClient} = require('mongodb');
 const {setWith, get} = require('lodash');
+const {v4: uuid4} = require('uuid');
 
-const {isThenable} = require('@raychee/utils');
+const {isThenable, limit} = require('@raychee/utils');
 
 
 module.exports = {
 
     type: 'mongodb',
 
-    key(
-        {
-            host, port, user, password, db, collection,
-            connectionOptions = {},
-            queryOptions = {},
-            aggregationOptions = {},
-            mapReduceOptions = {},
-            otherOptions = {debug: false, showProgressEvery: undefined},
-        }
-    ) {
-        return {host, port, user, password, db, collection, connectionOptions, queryOptions, aggregationOptions, mapReduceOptions, otherOptions};
+    key(options) {
+        return makeFullOptions(options);
     },
 
-    async create(
-        {
-            host, port, user, password, db, collection,
-            connectionOptions = {},
-            queryOptions = {},
-            aggregationOptions = {},
-            mapReduceOptions = {},
-            otherOptions = {debug: false, showProgressEvery: undefined},
-        },
-        {pluginLoader}
-    ) {
-        const options = {host, port, user, password, connectionOptions, queryOptions, aggregationOptions, mapReduceOptions, otherOptions};
+    async create(options, {pluginLoader}) {
+        options = makeFullOptions(options);
+        const {db, collection, ...restOptions} = options;
         if (db || collection) {
-            const plugin = await pluginLoader.get({type: 'mongodb', ...options});
+            const plugin = await pluginLoader.get({type: 'mongodb', ...restOptions});
             return plugin.use(db, collection);
         } else {
             return new MongoDB(this, options, pluginLoader);
@@ -48,14 +31,53 @@ module.exports = {
 };
 
 
+function makeFullOptions(
+    {
+        host, port, user, password, db, collection,
+        connectionOptions = {},
+        queryOptions = {},
+        aggregationOptions = {},
+        mapReduceOptions = {},
+        bulkOptions = {},
+        otherOptions = {},
+    }
+) {
+    return {
+        host, port, user, password, db, collection,
+        connectionOptions: {
+            useNewUrlParser: true, useUnifiedTopology: true,
+            ...connectionOptions,
+        },
+        queryOptions: {
+            batchSize: 1000,
+            ...queryOptions,
+        },
+        aggregationOptions: {
+            allowDiskUse: true,
+            ...aggregationOptions,
+        },
+        mapReduceOptions,
+        bulkOptions: {
+            batchSize: 1000,
+            concurrency: 1,
+            ...bulkOptions,
+        },
+        otherOptions: {
+            debug: false, showProgressEvery: undefined,
+            ...otherOptions,
+        }
+    };
+}
+
+
 class MongoDB {
 
     constructor(logger, options, pluginLoader, _state = {}) {
         this.logger = logger;
         this.options = options;
         this.pluginLoader = pluginLoader;
-
         this._state = _state;
+        this.bulkOperate = limit(MongoDB.prototype.bulkOperate.bind(this), 1);
     }
 
     use(logger, db, collection) {
@@ -178,6 +200,91 @@ class MongoDB {
         );
     }
 
+    async bulkOperate(logger, operation, options = {}) {
+        logger = logger || this.logger;
+        const {db, collection} = this.options;
+        if (!db || !collection) {
+            logger.crash('internal', 'this._db or this._collection is undefined');
+        }
+        if (operation.length <= 0) return;
+        options = {...this.options.bulkOptions, ...options};
+        let bulk = get(this._state, ['bulk', db, collection]);
+        if (!bulk) {
+            bulk = {operations: [], running: {}, errors: []};
+            setWith(this._state, ['bulk', db, collection], bulk, Object);
+        }
+        bulk.operations.push(operation);
+        if (bulk.operations.length > options.batchSize) {
+            if (bulk.flushing) {
+                await bulk.flushing;
+            }
+            await this._bulkCommit(logger, bulk, options);
+        }
+    }
+    
+    async _bulkCommit(logger, bulk, {debug, concurrency, ...opts}) {
+        logger = logger || this.logger;
+        const opId = uuid4();
+        const {operations, running, errors} = bulk;
+        while (Object.keys(running).length >= concurrency) {
+            if (debug || this.options.otherOptions.debug) {
+                logger.debug(
+                    'Wait for concurrency before bulkWrite: id = ', opId, 
+                    ', size = ', operations.length, '.'
+                );
+            }
+            await Promise.race(Object.values(running));
+            if (errors.length > 0) {
+                throw errors[0];
+            }
+        }
+        if (debug || this.options.otherOptions.debug) {
+            logger.debug(
+                'BulkWrite: id = ', opId, ', size = ', operations.length,
+                ', concurrency = ', Object.keys(running).length + 1, '/', concurrency, '.'
+            );
+        }
+        running[opId] = this.bulkWrite(logger, operations, {debug, ...opts})
+            .catch(e => errors.push(e))
+            .finally(() => {
+                delete running[opId];
+                if (debug || this.options.otherOptions.debug) {
+                    logger.debug(
+                        'Complete a bulkWrite: id = ', opId, ', size = ', operations.length,
+                        ', concurrency = ', Object.keys(running).length, '/', concurrency, '.'
+                    );
+                }
+            });
+        bulk.operations = [];
+    }
+    
+    async bulkFlush(logger, options = {}) {
+        logger = logger || this.logger;
+        const {db, collection} = this.options;
+        if (!db || !collection) {
+            logger.crash('internal', 'this._db or this._collection is undefined');
+        }
+        const bulk = get(this._state, ['bulk', db, collection]);
+        if (!bulk) return;
+        if (!bulk.flushing) {
+            options = {...this.options.bulkOptions, ...options};
+            bulk.flushing = this._bulkFlush(logger, bulk, options).finally(() => bulk.flushing = undefined);
+        }
+        await bulk.flushing;
+    }
+    
+    async _bulkFlush(logger, bulk, options) {
+        logger = logger || this.logger;
+        if (bulk.operations.length > 0) {
+            await this._bulkCommit(logger, bulk, options);
+        }
+        if (bulk.errors.length > 0) {
+            const [error] = bulk.errors;
+            bulk.errors = [];
+            throw error;
+        }
+    }
+
     drop(logger, options = {}) {
         logger = logger || this.logger;
         const {debug, ...opts} = options;
@@ -205,6 +312,18 @@ class MongoDB {
         }
         return this._handlePromise(
             logger, this._connect(logger).then(coll => coll.createIndexes(indexSpecs, opts))
+        );
+    }
+
+    watch(logger, pipeline, options) {
+        logger = logger || this.logger;
+        const {debug, ...opts} = options;
+        if (debug || this.options.otherOptions.debug) {
+            const {db, collection} = this.options;
+            logger.debug('mongodb.use(', db, ', ', collection, ').watch(', pipeline, ', ', opts, ');');
+        }
+        return this._handleCursor(
+            logger, this._connect(logger).then(coll => coll.watch(pipeline, opts))
         );
     }
 
@@ -253,12 +372,12 @@ class MongoDB {
 
     _handleCursor(logger, cursor) {
         logger = logger || this.logger;
-        const ops = [];
-        return new Proxy(cursor, {
-            get: (target, p, receiver) => {
+        const options = this.options;
+        let ops = [], target = cursor;
+        return new Proxy({}, {
+            get: (_, p, receiver) => {
                 switch (p) {
                     case Symbol.asyncIterator:
-                        let options = this.options;
                         return async function* () {
                             let count = 0;
                             while (await receiver.hasNext()) {
@@ -272,10 +391,34 @@ class MongoDB {
                                 process.stdout.write('✓\n');
                             }
                         };
+                    case 'batch':
+                        return async function* (batchSize) {
+                            batchSize = batchSize || options.queryOptions.batchSize;
+                            let batch = [];
+                            let count = 0;
+                            while (await receiver.hasNext()) {
+                                count++;
+                                if (count % options.otherOptions.showProgressEvery === 0) {
+                                    process.stdout.write('.');
+                                }
+                                batch.push(await receiver.next());
+                                if (batch.length >= batchSize) {
+                                    yield batch;
+                                    batch = [];
+                                }
+                            }
+                            if (batch.length > 0) {
+                                yield batch;
+                            }
+                            if (options.otherOptions.showProgressEvery) {
+                                process.stdout.write('✓\n');
+                            }
+                        };
                     case 'then':
                         return (onFulfilled, onRejected) => {
                             return receiver.next().then(onFulfilled, onRejected);
                         };
+                    case 'close':
                     case 'count':
                     case 'explain':
                     case 'forEach':
@@ -290,14 +433,29 @@ class MongoDB {
                                 for (const {method, args} of ops) {
                                     target = target[method](...args);
                                 }
+                                ops = [];
                                 return await target[p](...args);
                             })());
                         };
-                    default:
+                    case 'filter':
+                    case 'hint':
+                    case 'limit':
+                    case 'map':
+                    case 'max':
+                    case 'maxAwaitTimeMS':
+                    case 'maxTimeMS':
+                    case 'min':
+                    case 'project':
+                    case 'setReadPreference':
+                    case 'showRecordId':
+                    case 'skip':
+                    case 'sort':
                         return (...args) => {
                             ops.push({method: p, args});
                             return receiver;
                         };
+                    default:
+                        logger.crash('internal', 'method "', p, '" on cursor is not supported in mongodb plugin');
                 }
             }
         });
