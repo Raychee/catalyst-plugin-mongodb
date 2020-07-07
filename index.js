@@ -278,6 +278,10 @@ class MongoDB {
         if (bulk.operations.length > 0) {
             await this._bulkCommit(logger, bulk, options);
         }
+        const running = Object.values(bulk.running);
+        if (running.length > 0) {
+            await Promise.all(running);
+        }
         if (bulk.errors.length > 0) {
             const [error] = bulk.errors;
             bulk.errors = [];
