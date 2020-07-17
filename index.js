@@ -23,6 +23,11 @@ module.exports = {
             return new MongoDB(this, options, pluginLoader);
         }
     },
+    
+    unload(mongodb, job) {
+        const bulk = mongodb._state.bulk;
+        if (bulk) delete bulk[getJobId(job)];
+    },
 
     async destroy(mongodb) {
         await mongodb._close();
@@ -69,6 +74,9 @@ function makeFullOptions(
     };
 }
 
+function getJobId(logger) {
+    return get(logger, ['config', 'id'], '');
+}
 
 class MongoDB {
 
@@ -208,10 +216,10 @@ class MongoDB {
         }
         if (operation.length <= 0) return;
         options = {...this.options.bulkOptions, ...options};
-        let bulk = get(this._state, ['bulk', db, collection]);
+        let bulk = get(this._state, ['bulk', getJobId(logger), db, collection]);
         if (!bulk) {
             bulk = {operations: [], running: {}, errors: []};
-            setWith(this._state, ['bulk', db, collection], bulk, Object);
+            setWith(this._state, ['bulk', getJobId(logger), db, collection], bulk, Object);
         }
         bulk.operations.push(operation);
         if (bulk.operations.length > options.batchSize) {
@@ -226,6 +234,9 @@ class MongoDB {
         logger = logger || this.logger;
         const opId = uuid4();
         const {operations, running, errors} = bulk;
+        if (errors.length > 0) {
+            throw errors[0];
+        }
         while (Object.keys(running).length >= concurrency) {
             if (debug || this.options.otherOptions.debug) {
                 logger.debug(
@@ -264,7 +275,7 @@ class MongoDB {
         if (!db || !collection) {
             logger.crash('internal', 'this._db or this._collection is undefined');
         }
-        const bulk = get(this._state, ['bulk', db, collection]);
+        const bulk = get(this._state, ['bulk', getJobId(logger), db, collection]);
         if (!bulk) return;
         if (!bulk.flushing) {
             options = {...this.options.bulkOptions, ...options};
