@@ -25,8 +25,18 @@ module.exports = {
     },
     
     unload(mongodb, job) {
+        const jobId = getJobId(job);
         const bulk = mongodb._state.bulk;
-        if (bulk) delete bulk[getJobId(job)];
+        if (bulk) delete bulk[jobId];
+        const cursors = get(mongodb._state, ['cursors', jobId]);
+        if (cursors) {
+            for (const cursor of cursors) {
+                if (!cursor.isClosed) {
+                    cursor.close();
+                }
+            }
+            delete mongodb._state.cursors[jobId];
+        }
     },
 
     async destroy(mongodb) {
@@ -387,8 +397,14 @@ class MongoDB {
 
     _handleCursor(logger, cursor) {
         logger = logger || this.logger;
-        const options = this.options;
+        const {queryOptions, otherOptions} = this.options;
         let ops = [], target = cursor;
+        if (cursor.addCursorFlag) {
+            cursor.addCursorFlag('noCursorTimeout', true);
+        }
+        const cursors = get(this._state, ['cursors', getJobId(logger)], []);
+        setWith(this._state, ['cursors', getJobId(logger)], cursors, Object);
+        cursors.push(cursor);
         return new Proxy({}, {
             get: (_, p, receiver) => {
                 switch (p) {
@@ -397,23 +413,23 @@ class MongoDB {
                             let count = 0;
                             while (await receiver.hasNext()) {
                                 count++;
-                                if (count % options.otherOptions.showProgressEvery === 0) {
+                                if (count % otherOptions.showProgressEvery === 0) {
                                     process.stdout.write('.');
                                 }
                                 yield await receiver.next();
                             }
-                            if (options.otherOptions.showProgressEvery) {
+                            if (otherOptions.showProgressEvery) {
                                 process.stdout.write('✓\n');
                             }
                         };
                     case 'batch':
                         return async function* (batchSize) {
-                            batchSize = batchSize || options.queryOptions.batchSize;
+                            batchSize = batchSize || queryOptions.batchSize;
                             let batch = [];
                             let count = 0;
                             while (await receiver.hasNext()) {
                                 count++;
-                                if (count % options.otherOptions.showProgressEvery === 0) {
+                                if (count % otherOptions.showProgressEvery === 0) {
                                     process.stdout.write('.');
                                 }
                                 batch.push(await receiver.next());
@@ -425,7 +441,7 @@ class MongoDB {
                             if (batch.length > 0) {
                                 yield batch;
                             }
-                            if (options.otherOptions.showProgressEvery) {
+                            if (otherOptions.showProgressEvery) {
                                 process.stdout.write('✓\n');
                             }
                         };
