@@ -23,7 +23,7 @@ module.exports = {
             return new MongoDB(this, options, pluginLoader);
         }
     },
-    
+
     unload(mongodb, job) {
         const jobId = getJobId(job);
         const bulk = mongodb._state.bulk;
@@ -31,7 +31,7 @@ module.exports = {
         const cursors = get(mongodb._state, ['cursors', jobId]);
         if (cursors) {
             for (const cursor of cursors) {
-                if (!cursor.isClosed) {
+                if (!cursor.isClosed()) {
                     cursor.close();
                 }
             }
@@ -85,7 +85,7 @@ function makeFullOptions(
 }
 
 function getJobId(logger) {
-    return get(logger, ['config', 'id'], '');
+    return get(logger, ['config', '_id'], '');
 }
 
 class MongoDB {
@@ -239,7 +239,7 @@ class MongoDB {
             await this._bulkCommit(logger, bulk, options);
         }
     }
-    
+
     async _bulkCommit(logger, bulk, {debug, concurrency, ...opts}) {
         logger = logger || this.logger;
         const opId = uuid4();
@@ -250,7 +250,7 @@ class MongoDB {
         while (Object.keys(running).length >= concurrency) {
             if (debug || this.options.otherOptions.debug) {
                 logger.debug(
-                    'Wait for concurrency before bulkWrite: id = ', opId, 
+                    'Wait for concurrency before bulkWrite: id = ', opId,
                     ', size = ', operations.length, '.'
                 );
             }
@@ -278,7 +278,7 @@ class MongoDB {
             });
         bulk.operations = [];
     }
-    
+
     async bulkFlush(logger, options = {}) {
         logger = logger || this.logger;
         const {db, collection} = this.options;
@@ -293,7 +293,7 @@ class MongoDB {
         }
         await bulk.flushing;
     }
-    
+
     async _bulkFlush(logger, bulk, options) {
         logger = logger || this.logger;
         if (bulk.operations.length > 0) {
@@ -399,12 +399,6 @@ class MongoDB {
         logger = logger || this.logger;
         const {queryOptions, otherOptions} = this.options;
         let ops = [], target = cursor;
-        if (cursor.addCursorFlag) {
-            cursor.addCursorFlag('noCursorTimeout', true);
-        }
-        const cursors = get(this._state, ['cursors', getJobId(logger)], []);
-        setWith(this._state, ['cursors', getJobId(logger)], cursors, Object);
-        cursors.push(cursor);
         return new Proxy({}, {
             get: (_, p, receiver) => {
                 switch (p) {
@@ -465,6 +459,14 @@ class MongoDB {
                                     target = target[method](...args);
                                 }
                                 ops = [];
+                                const cursors = get(this._state, ['cursors', getJobId(logger)], []);
+                                setWith(this._state, ['cursors', getJobId(logger)], cursors, Object);
+                                if (!cursors.includes(target)) {
+                                    if (target.addCursorFlag) {
+                                        target.addCursorFlag('noCursorTimeout', true);
+                                    }
+                                    cursors.push(target);
+                                }
                                 return await target[p](...args);
                             })());
                         };
