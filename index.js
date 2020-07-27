@@ -28,15 +28,6 @@ module.exports = {
         const jobId = getJobId(job);
         const bulk = mongodb._state.bulk;
         if (bulk) delete bulk[jobId];
-        const cursors = get(mongodb._state, ['cursors', jobId]);
-        if (cursors) {
-            for (const cursor of cursors) {
-                if (!cursor.isClosed()) {
-                    cursor.close();
-                }
-            }
-            delete mongodb._state.cursors[jobId];
-        }
     },
 
     async destroy(mongodb) {
@@ -459,17 +450,14 @@ class MongoDB {
                                     target = target[method](...args);
                                 }
                                 ops = [];
-                                const cursors = get(this._state, ['cursors', getJobId(logger)], []);
-                                setWith(this._state, ['cursors', getJobId(logger)], cursors, Object);
-                                if (!cursors.includes(target)) {
-                                    if (target.addCursorFlag) {
-                                        target.addCursorFlag('noCursorTimeout', true);
-                                    }
-                                    cursors.push(target);
-                                }
                                 return await target[p](...args);
                             })());
                         };
+                    case 'addCursorFlag':
+                    case 'addQueryModifier':
+                    case 'batchSize':
+                    case 'collation':
+                    case 'comment':
                     case 'filter':
                     case 'hint':
                     case 'limit':
