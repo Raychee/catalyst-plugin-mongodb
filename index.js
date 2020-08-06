@@ -28,6 +28,8 @@ module.exports = {
         const jobId = getJobId(job);
         const bulk = mongodb._state.bulk;
         if (bulk) delete bulk[jobId];
+        const operate = mongodb._state.operate;
+        if (operate) delete operate[jobId];
     },
 
     async destroy(mongodb) {
@@ -45,6 +47,7 @@ function makeFullOptions(
         aggregationOptions = {},
         mapReduceOptions = {},
         bulkOptions = {},
+        operateOptions = {},
         otherOptions = {},
     }
 ) {
@@ -67,6 +70,10 @@ function makeFullOptions(
             batchSize: 1000,
             concurrency: 1,
             ...bulkOptions,
+        },
+        operateOptions: {
+            concurrency: 1,
+            ...operateOptions,
         },
         otherOptions: {
             debug: false, showProgressEvery: undefined,
@@ -195,6 +202,85 @@ class MongoDB {
         return this._handlePromise(
             logger, this._connect(logger).then(coll => coll.deleteMany(filter, opts))
         );
+    }
+    
+    async operate(logger, fn, options = {}) {
+        logger = logger || this.logger;
+        const {db, collection} = this.options;
+        let key;
+        if (db && collection) {
+            key = ['operate', getJobId(logger), 'collection'];
+        } else if (db) {
+            key = ['operate', getJobId(logger), 'db'];
+        } else {
+            key = ['operate', getJobId(logger), 'client'];
+        }
+        let state = get(this._state, key);
+        if (!state) {
+            state = {running: {}, errors: []};
+            setWith(this._state, key, state, Object);
+        }
+        options = {...this.options.operateOptions, ...options};
+        const {concurrency, debug} = options;
+        const {running, errors} = state;
+        const opId = uuid4();
+        while (Object.keys(running).length >= concurrency) {
+            if (debug || this.options.otherOptions.debug) {
+                logger.debug('Wait for concurrency before operation: id = ', opId, '.');
+            }
+            await Promise.race(Object.values(running));
+            if (errors.length > 0) {
+                throw errors[0];
+            }
+        }
+        if (debug || this.options.otherOptions.debug) {
+            logger.debug(
+                'Operate: id = ', opId, ', concurrency = ', 
+                Object.keys(running).length + 1, '/', concurrency, '.'
+            );
+        }
+        running[opId] = fn()
+            .catch(e => errors.push(e))
+            .finally(() => {
+                delete running[opId];
+                if (debug || this.options.otherOptions.debug) {
+                    logger.debug(
+                        'Complete operation: id = ', opId, 
+                        ', concurrency = ', Object.keys(running).length, '/', concurrency, '.'
+                    );
+                }
+            });
+    }
+    
+    async operateFlush(logger) {
+        logger = logger || this.logger;
+        const {db, collection} = this.options;
+        let key;
+        if (db && collection) {
+            key = ['operate', getJobId(logger), 'collection'];
+        } else if (db) {
+            key = ['operate', getJobId(logger), 'db'];
+        } else {
+            key = ['operate', getJobId(logger), 'client'];
+        }
+        let state = get(this._state, key);
+        if (!state) return;
+        if (!state.flushing) {
+            state.flushing = this._operateFlush(state).finally(() => state.flushing = undefined);
+        }
+        await state.flushing;
+    }
+
+    async _operateFlush(state) {
+        const running = Object.values(state.running);
+        if (running.length > 0) {
+            await Promise.all(running);
+        }
+        if (state.errors.length > 0) {
+            const [error] = state.errors;
+            state.errors = [];
+            throw error;
+        }
     }
 
     bulkWrite(logger, operations, options = {}) {
