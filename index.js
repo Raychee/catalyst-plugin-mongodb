@@ -305,7 +305,7 @@ class MongoDB {
         options = {...this.options.bulkOptions, ...options};
         let bulk = get(this._state, ['bulk', getJobId(logger), db, collection]);
         if (!bulk) {
-            bulk = {operations: [], running: {}, errors: []};
+            bulk = {operations: [], running: {}, errors: [], result: {}};
             setWith(this._state, ['bulk', getJobId(logger), db, collection], bulk, Object);
         }
         bulk.operations.push(operation);
@@ -320,7 +320,7 @@ class MongoDB {
     async _bulkCommit(logger, bulk, {debug, concurrency, ...opts}) {
         logger = logger || this.logger;
         const opId = uuid4();
-        const {operations, running, errors} = bulk;
+        const {operations, running, errors, result} = bulk;
         if (errors.length > 0) {
             throw errors[0];
         }
@@ -343,6 +343,13 @@ class MongoDB {
             );
         }
         running[opId] = this.bulkWrite(logger, operations, {debug, ...opts})
+            .then(r => {
+                for (const [p, v] of Object.entries(r)) {
+                    if (typeof v === 'number') {
+                        result[p] = (result[p] || 0) + v; 
+                    }
+                }
+            })
             .catch(e => errors.push(e))
             .finally(() => {
                 delete running[opId];
@@ -363,12 +370,12 @@ class MongoDB {
             logger.crash('internal', 'this._db or this._collection is undefined');
         }
         const bulk = get(this._state, ['bulk', getJobId(logger), db, collection]);
-        if (!bulk) return;
+        if (!bulk) return {};
         if (!bulk.flushing) {
             options = {...this.options.bulkOptions, ...options};
             bulk.flushing = this._bulkFlush(logger, bulk, options).finally(() => bulk.flushing = undefined);
         }
-        await bulk.flushing;
+        return await bulk.flushing;
     }
 
     async _bulkFlush(logger, bulk, options) {
@@ -385,6 +392,9 @@ class MongoDB {
             bulk.errors = [];
             throw error;
         }
+        const result = bulk.result;
+        bulk.result = {};
+        return result;
     }
 
     drop(logger, options = {}) {
