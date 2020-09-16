@@ -124,7 +124,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').aggregate(', pipeline, ', ', opts, ');');
         }
         return this._handleCursor(
-            logger, this._connect(logger).then(coll => coll.aggregate(pipeline, opts))
+            logger, this._getCollection(logger).then(coll => coll.aggregate(pipeline, opts))
         );
     }
 
@@ -137,7 +137,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').mapReduce(', map, ', ', reduce, ', ', opts, ');');
         }
         return this._handlePromise(
-            logger, this._connect(logger).then(coll => coll.mapReduce(map, reduce, opts))
+            logger, this._getCollection(logger).then(coll => coll.mapReduce(map, reduce, opts))
         );
     }
 
@@ -150,7 +150,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').find(', query, ', ', opts, ');');
         }
         return this._handleCursor(
-            logger, this._connect(logger).then(coll => coll.find(query, opts))
+            logger, this._getCollection(logger).then(coll => coll.find(query, opts))
         );
     }
 
@@ -163,7 +163,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').findOne(', query, ', ', opts, ');');
         }
         return this._handlePromise(
-            logger, this._connect(logger).then(coll => coll.findOne(query, opts))
+            logger, this._getCollection(logger).then(coll => coll.findOne(query, opts))
         );
     }
 
@@ -176,7 +176,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').countDocuments(', query, ', ', opts, ');');
         }
         return this._handlePromise(
-            logger, this._connect(logger).then(coll => coll.countDocuments(query, opts))
+            logger, this._getCollection(logger).then(coll => coll.countDocuments(query, opts))
         );
     }
 
@@ -188,7 +188,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').updateMany(', filter, ', ', update, ', ', opts, ');');
         }
         return this._handlePromise(
-            logger, this._connect(logger).then(coll => coll.updateMany(filter, update, opts))
+            logger, this._getCollection(logger).then(coll => coll.updateMany(filter, update, opts))
         );
     }
 
@@ -200,7 +200,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').deleteMany(', filter, ', ', opts, ');');
         }
         return this._handlePromise(
-            logger, this._connect(logger).then(coll => coll.deleteMany(filter, opts))
+            logger, this._getCollection(logger).then(coll => coll.deleteMany(filter, opts))
         );
     }
     
@@ -291,7 +291,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').bulkWrite(', operations, ', ', opts, ');');
         }
         return this._handlePromise(
-            logger, this._connect(logger).then(coll => coll.bulkWrite(operations, opts))
+            logger, this._getCollection(logger).then(coll => coll.bulkWrite(operations, opts))
         );
     }
 
@@ -396,7 +396,19 @@ class MongoDB {
         bulk.result = {};
         return result;
     }
-
+    
+    collections(logger, options = {}) {
+        logger = logger || this.logger;
+        const {debug, ...opts} = options;
+        if (debug || this.options.otherOptions.debug) {
+            const {db} = this.options;
+            logger.debug('mongodb.use(', db, ').collections(', opts, ');');
+        }
+        return this._handlePromise(
+            logger, this._getDb(logger).then(db => db.collections(opts))
+        );
+    }
+    
     drop(logger, options = {}) {
         logger = logger || this.logger;
         const {debug, ...opts} = options;
@@ -405,7 +417,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').drop(', opts, ');');
         }
         return this._handlePromise(
-            logger, this._connect(logger).then(coll => coll.drop(opts).catch(e => {
+            logger, this._getCollection(logger).then(coll => coll.drop(opts).catch(e => {
                 if (e.message.match(/ns not found/)) {
                     return null;
                 } else {
@@ -423,7 +435,7 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').createIndexes(', indexSpecs, ', ', opts, ');');
         }
         return this._handlePromise(
-            logger, this._connect(logger).then(coll => coll.createIndexes(indexSpecs, opts))
+            logger, this._getCollection(logger).then(coll => coll.createIndexes(indexSpecs, opts))
         );
     }
 
@@ -435,16 +447,12 @@ class MongoDB {
             logger.debug('mongodb.use(', db, ', ', collection, ').watch(', pipeline, ', ', opts, ');');
         }
         return this._handleCursor(
-            logger, this._connect(logger).then(coll => coll.watch(pipeline, opts))
+            logger, this._getCollection(logger).then(coll => coll.watch(pipeline, opts))
         );
     }
-
-    async _connect(logger) {
-        logger = logger || this.logger;
-        const {host, port, user, password, db, collection, connectionOptions} = this.options;
-        if (!db || !collection) {
-            logger.crash('internal', 'this._db or this._collection is undefined');
-        }
+    
+    async _getClient() {
+        const {host, port, user, password, connectionOptions} = this.options;
         if (!this._state.client) {
             const auth = user && password ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@` : '';
             const uri = `mongodb://${auth}${host}${port ? `:${port}` : ''}`;
@@ -452,9 +460,29 @@ class MongoDB {
             await client.connect();
             this._state.client = client;
         }
+        return this._state.client;
+    }
+    
+    async _getDb(logger) {
+        logger = logger || this.logger;
+        const {db} = this.options;
+        if (!db) {
+            logger.crash('internal', 'this._db is undefined');
+        }
+        const client = await this._getClient();
+        return client.db(db);
+    }
+
+    async _getCollection(logger) {
+        logger = logger || this.logger;
+        const {db, collection} = this.options;
+        if (!db || !collection) {
+            logger.crash('internal', 'this._db or this._collection is undefined');
+        }
         let coll = get(this._state, ['pool', db, collection]);
         if (!coll) {
-            coll = this._state.client.db(db).collection(collection);
+            const db_ = await this._getDb(logger);
+            coll = db_.collection(collection);
             setWith(this._state, ['pool', db, collection], coll, Object);
         }
         return coll;
