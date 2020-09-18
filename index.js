@@ -2,7 +2,7 @@ const {MongoClient} = require('mongodb');
 const {setWith, get} = require('lodash');
 const {v4: uuid4} = require('uuid');
 
-const {isThenable, limit} = require('@raychee/utils');
+const {isThenable} = require('@raychee/utils');
 
 
 module.exports = {
@@ -93,7 +93,6 @@ class MongoDB {
         this.options = options;
         this.pluginLoader = pluginLoader;
         this._state = _state;
-        this.bulkOperate = limit(MongoDB.prototype.bulkOperate.bind(this), 1);
     }
 
     use(logger, db, collection) {
@@ -229,9 +228,11 @@ class MongoDB {
                 logger.debug('Wait for concurrency before operation: id = ', opId, '.');
             }
             await Promise.race(Object.values(running));
-            if (errors.length > 0) {
-                throw errors[0];
-            }
+        }
+        if (errors.length > 0) {
+            const [error] = errors;
+            state.errors = [];
+            throw error;
         }
         if (debug || this.options.otherOptions.debug) {
             logger.debug(
@@ -266,7 +267,7 @@ class MongoDB {
         let state = get(this._state, key);
         if (!state) return;
         if (!state.flushing) {
-            state.flushing = this._operateFlush(state).finally(() => state.flushing = undefined);
+            state.flushing = this._operateFlush(state).finally(() => delete state.flushing);
         }
         await state.flushing;
     }
@@ -303,27 +304,27 @@ class MongoDB {
         }
         if (operation.length <= 0) return;
         options = {...this.options.bulkOptions, ...options};
-        let bulk = get(this._state, ['bulk', getJobId(logger), db, collection]);
-        if (!bulk) {
-            bulk = {operations: [], running: {}, errors: [], result: {}};
-            setWith(this._state, ['bulk', getJobId(logger), db, collection], bulk, Object);
+        let context = get(this._state, ['bulk', getJobId(logger), db, collection]);
+        if (!context) {
+            context = {operations: [], running: {}, errors: [], result: {}};
+            setWith(this._state, ['bulk', getJobId(logger), db, collection], context, Object);
         }
-        bulk.operations.push(operation);
-        if (bulk.operations.length > options.batchSize) {
-            if (bulk.flushing) {
-                await bulk.flushing;
+        while (context.operations.length >= options.batchSize) {
+            if (context.flushing) {
+                await context.flushing;
             }
-            await this._bulkCommit(logger, bulk, options);
+            if (!context.committing) {
+                context.committing = this._bulkCommit(logger, context, options).finally(() => delete context.committing);
+            }
+            await context.committing;
         }
+        context.operations.push(operation);
     }
 
-    async _bulkCommit(logger, bulk, {debug, concurrency, ...opts}) {
+    async _bulkCommit(logger, context, {debug, concurrency, ...opts}) {
         logger = logger || this.logger;
         const opId = uuid4();
-        const {operations, running, errors, result} = bulk;
-        if (errors.length > 0) {
-            throw errors[0];
-        }
+        const {operations, running, errors, result} = context;
         while (Object.keys(running).length >= concurrency) {
             if (debug || this.options.otherOptions.debug) {
                 logger.debug(
@@ -332,9 +333,12 @@ class MongoDB {
                 );
             }
             await Promise.race(Object.values(running));
-            if (errors.length > 0) {
-                throw errors[0];
-            }
+        }
+        if (errors.length > 0) {
+            const [error] = errors;
+            context.errors = [];
+            context.result = {};
+            throw error;
         }
         if (debug || this.options.otherOptions.debug) {
             logger.debug(
@@ -360,7 +364,7 @@ class MongoDB {
                     );
                 }
             });
-        bulk.operations = [];
+        context.operations = [];
     }
 
     async bulkFlush(logger, options = {}) {
@@ -369,31 +373,35 @@ class MongoDB {
         if (!db || !collection) {
             logger.crash('internal', 'this._db or this._collection is undefined');
         }
-        const bulk = get(this._state, ['bulk', getJobId(logger), db, collection]);
-        if (!bulk) return {};
-        if (!bulk.flushing) {
+        const context = get(this._state, ['bulk', getJobId(logger), db, collection]);
+        if (!context) return {};
+        if (!context.flushing) {
             options = {...this.options.bulkOptions, ...options};
-            bulk.flushing = this._bulkFlush(logger, bulk, options).finally(() => bulk.flushing = undefined);
+            context.flushing = this._bulkFlush(logger, context, options).finally(() => delete context.flushing);
         }
-        return await bulk.flushing;
+        return await context.flushing;
     }
 
-    async _bulkFlush(logger, bulk, options) {
+    async _bulkFlush(logger, context, options) {
         logger = logger || this.logger;
-        if (bulk.operations.length > 0) {
-            await this._bulkCommit(logger, bulk, options);
+        if (context.operations.length > 0) {
+            while (context.committing) {
+                await context.committing;
+            }
+            context.committing = this._bulkCommit(logger, context, options).finally(() => delete context.committing);
+            await context.committing;
         }
-        const running = Object.values(bulk.running);
+        const running = Object.values(context.running);
         if (running.length > 0) {
             await Promise.all(running);
         }
-        if (bulk.errors.length > 0) {
-            const [error] = bulk.errors;
-            bulk.errors = [];
+        if (context.errors.length > 0) {
+            const [error] = context.errors;
+            context.errors = [];
             throw error;
         }
-        const result = bulk.result;
-        bulk.result = {};
+        const result = context.result;
+        context.result = {};
         return result;
     }
     
