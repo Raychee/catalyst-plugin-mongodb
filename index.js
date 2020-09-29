@@ -296,13 +296,17 @@ class MongoDB {
         );
     }
 
-    async bulkOperate(logger, operation, options = {}) {
+    async bulkOperate(logger, operations, options = {}) {
         logger = logger || this.logger;
         const {db, collection} = this.options;
         if (!db || !collection) {
             logger.crash('internal', 'this._db or this._collection is undefined');
         }
-        if (operation.length <= 0) return;
+        if (!operations) {
+            logger.crash('internal', 'operation must be provided!');
+        }
+        if (!Array.isArray(operations)) operations = [operations];
+        if (operations.length <= 0) return ;
         options = {...this.options.bulkOptions, ...options};
         let context = get(this._state, ['bulk', getJobId(logger), db, collection]);
         if (!context) {
@@ -318,7 +322,7 @@ class MongoDB {
             }
             await context.committing;
         }
-        context.operations.push(operation);
+        context.operations.push(...operations);
     }
 
     async _bulkCommit(logger, context, {debug, concurrency, ...opts}) {
