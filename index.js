@@ -191,6 +191,18 @@ class MongoDB {
         );
     }
 
+    updateOne(logger, filter, update, options = {}) {
+        logger = logger || this.logger;
+        const {debug, ...opts} = options;
+        if (debug || this.options.otherOptions.debug) {
+            const {db, collection} = this.options;
+            logger.debug('mongodb.use(', db, ', ', collection, ').updateOne(', filter, ', ', update, ', ', opts, ');');
+        }
+        return this._handlePromise(
+            logger, this._getCollection(logger).then(coll => coll.updateOne(filter, update, opts))
+        );
+    }
+
     deleteMany(logger, filter, options = {}) {
         logger = logger || this.logger;
         const {debug, ...opts} = options;
