@@ -107,7 +107,7 @@ class MongoDB {
                 options = {...this.options, db};
             }
         } else if (collection) {
-            logger.crash('internal', 'cannot call this.use(collection) without db');
+            logger.crash('mongodb_plugin_error', 'cannot call this.use(collection) without db');
         } else {
             return this;
         }
@@ -115,17 +115,33 @@ class MongoDB {
     }
 
     get dbName() {
+        if (!this.options.db) {
+            this.logger.crash('mongodb_plugin_error', 'this._db is undefined');
+        }
         return this.options.db;
     }
     
     get collectionName() {
+        if (!this.options.collection) {
+            this.logger.crash('mongodb_plugin_error', 'this._collection is undefined');
+        }
         return this.options.collection;
     }
 
     get namespace() {
         const {db, collection} = this.options;
-        if (!db || !collection) return undefined;
+        if (!db || !collection) {
+            this.logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
+        }
         return `${db}.${collection}`;
+    }
+    
+    get namespaceObject() {
+        const {db, collection} = this.options;
+        if (!db || !collection) {
+            this.logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
+        }
+        return {db, coll: collection};
     }
     
     aggregate(logger, pipeline, options) {
@@ -326,10 +342,10 @@ class MongoDB {
         logger = logger || this.logger;
         const {db, collection} = this.options;
         if (!db || !collection) {
-            logger.crash('internal', 'this._db or this._collection is undefined');
+            logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
         }
         if (!operations) {
-            logger.crash('internal', 'operation must be provided!');
+            logger.crash('mongodb_plugin_error', 'operation must be provided!');
         }
         if (!Array.isArray(operations)) operations = [operations];
         if (operations.length <= 0) return ;
@@ -401,7 +417,7 @@ class MongoDB {
         logger = logger || this.logger;
         const {db, collection} = this.options;
         if (!db || !collection) {
-            logger.crash('internal', 'this._db or this._collection is undefined');
+            logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
         }
         const context = get(this._state, ['bulk', getJobId(logger), db, collection]);
         if (!context) return {};
@@ -505,7 +521,7 @@ class MongoDB {
         logger = logger || this.logger;
         const {db} = this.options;
         if (!db) {
-            logger.crash('internal', 'this._db is undefined');
+            logger.crash('mongodb_plugin_error', 'this._db is undefined');
         }
         const client = await this._getClient();
         return client.db(db);
@@ -515,7 +531,7 @@ class MongoDB {
         logger = logger || this.logger;
         const {db, collection} = this.options;
         if (!db || !collection) {
-            logger.crash('internal', 'this._db or this._collection is undefined');
+            logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
         }
         let coll = get(this._state, ['pool', db, collection]);
         if (!coll) {
@@ -638,7 +654,7 @@ class MongoDB {
                             return receiver;
                         };
                     default:
-                        logger.crash('internal', 'method "', p, '" on cursor is not supported in mongodb plugin');
+                        logger.crash('mongodb_plugin_error', 'method "', p, '" on cursor is not supported in mongodb plugin');
                 }
             }
         });
