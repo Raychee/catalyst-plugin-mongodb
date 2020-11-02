@@ -114,6 +114,20 @@ class MongoDB {
         return this.pluginLoader.create(new MongoDB(this.logger, options, this.pluginLoader, this._state), logger);
     }
 
+    get dbName() {
+        return this.options.db;
+    }
+    
+    get collectionName() {
+        return this.options.collection;
+    }
+
+    get namespace() {
+        const {db, collection} = this.options;
+        if (!db || !collection) return undefined;
+        return `${db}.${collection}`;
+    }
+    
     aggregate(logger, pipeline, options) {
         logger = logger || this.logger;
         options = {...this.options.aggregationOptions, ...options};
