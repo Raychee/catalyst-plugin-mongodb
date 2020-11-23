@@ -10,6 +10,7 @@ module.exports = {
     type: 'mongodb',
 
     key(options) {
+        if (options.db || options.collection) return;
         return makeFullOptions(options);
     },
 
@@ -18,7 +19,7 @@ module.exports = {
         const {db, collection, ...restOptions} = options;
         if (db || collection) {
             const plugin = await pluginLoader.get({type: 'mongodb', ...restOptions});
-            return plugin.use(db, collection);
+            return plugin.instance._use(db, collection);
         } else {
             return new MongoDB(this, options, pluginLoader);
         }
@@ -33,7 +34,9 @@ module.exports = {
     },
 
     async destroy(mongodb) {
-        await mongodb._close();
+        if (!mongodb.options.db && !mongodb.options.collection) {
+            await mongodb._close();
+        }
     }
 
 };
@@ -94,8 +97,23 @@ class MongoDB {
         this.pluginLoader = pluginLoader;
         this._state = _state;
     }
-
+    
     use(logger, db, collection) {
+        return this.pluginLoader.bind(this._use(logger, db, collection), logger);
+    }
+
+    _use(logger, db, collection) {
+        if (!db && !collection) return this;
+        const options = this._makeNewNamespaceOptions(logger, db, collection);
+        return new MongoDB(this.logger, options, this.pluginLoader, this._state);
+    }
+    
+    async _loadNamespace(logger, db, collection) {
+        const options = this._makeNewNamespaceOptions(logger, db, collection);
+        return this.pluginLoader.get({type: 'mongodb', ...options});
+    }
+    
+    _makeNewNamespaceOptions(logger, db, collection) {
         logger = logger || this.logger;
         let options = this.options;
         if (db && collection) {
@@ -107,13 +125,13 @@ class MongoDB {
                 options = {...this.options, db};
             }
         } else if (collection) {
-            logger.crash('mongodb_plugin_error', 'cannot call this.use(collection) without db');
+            logger.crash('mongodb_plugin_error', 'cannot call this.use() without db');
         } else {
-            return this;
+            logger.crash('mongodb_plugin_error', 'cannot call this.use() without db and collection');
         }
-        return this.pluginLoader.create(new MongoDB(this.logger, options, this.pluginLoader, this._state), logger);
+        return options;
     }
-
+    
     get dbName() {
         if (!this.options.db) {
             this.logger.crash('mongodb_plugin_error', 'this._db is undefined');
