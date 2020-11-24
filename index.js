@@ -19,7 +19,7 @@ module.exports = {
         const {db, collection, ...restOptions} = options;
         if (db || collection) {
             const plugin = await pluginLoader.get({type: 'mongodb', ...restOptions});
-            return plugin.instance._use(db, collection);
+            return plugin.instance._use(plugin.instance.logger, db, collection);
         } else {
             return new MongoDB(this, options, pluginLoader);
         }
