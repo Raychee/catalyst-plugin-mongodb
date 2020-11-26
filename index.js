@@ -110,7 +110,7 @@ class MongoDB {
     
     async _loadNamespace(logger, db, collection) {
         const options = this._makeNewNamespaceOptions(logger, db, collection);
-        return this.pluginLoader.get({type: 'mongodb', ...options});
+        return this.pluginLoader.get({type: 'mongodb', ...options}, logger);
     }
     
     _makeNewNamespaceOptions(logger, db, collection) {

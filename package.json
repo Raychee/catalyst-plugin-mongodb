@@ -1,6 +1,6 @@
 {
   "name": "@raychee/catalyst-plugin-mongodb",
-  "version": "0.0.19",
+  "version": "0.0.20",
   "description": "mongodb plugin for catalyst",
   "main": "index.js",
   "scripts": {},
