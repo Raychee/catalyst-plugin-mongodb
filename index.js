@@ -19,7 +19,7 @@ module.exports = {
         const {db, collection, ...restOptions} = options;
         if (db || collection) {
             const plugin = await pluginLoader.get({type: 'mongodb', ...restOptions});
-            return plugin.instance._use(plugin.instance.logger, db, collection);
+            return plugin.instance._use(this, db, collection);
         } else {
             return new MongoDB(this, options, pluginLoader);
         }
@@ -460,10 +460,10 @@ class MongoDB {
 
     async _bulkFlush(logger, context, options) {
         logger = logger || this.logger;
+        while (context.committing) {
+            await context.committing;
+        }
         if (context.operations.length > 0) {
-            while (context.committing) {
-                await context.committing;
-            }
             context.committing = this._bulkCommit(logger, context, options).finally(() => delete context.committing);
             await context.committing;
         }
@@ -561,7 +561,7 @@ class MongoDB {
         logger = logger || this.logger;
         const {db, collection} = this.options;
         if (!db || !collection) {
-            logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
+            logger.crash('mongodb_plugin_error', 'this.options.db or this.options.collection is undefined');
         }
         let coll = get(this._state, ['pool', db, collection]);
         if (!coll) {
