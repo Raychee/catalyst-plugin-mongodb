@@ -1,6 +1,6 @@
 {
   "name": "@raychee/catalyst-plugin-mongodb",
-  "version": "0.0.21",
+  "version": "0.0.22",
   "description": "mongodb plugin for catalyst",
   "main": "index.js",
   "scripts": {},
@@ -15,7 +15,7 @@
   },
   "homepage": "https://github.com/Raychee/catalyst-plugin-mongodb#readme",
   "dependencies": {
-    "@raychee/utils": "^0.2.3",
+    "@raychee/utils": "^0.2.29",
     "lodash": "^4.17.15",
     "uuid": "^8.2.0"
   },

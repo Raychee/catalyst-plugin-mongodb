@@ -125,23 +125,23 @@ class MongoDB {
                 options = {...this.options, db};
             }
         } else if (collection) {
-            logger.crash('mongodb_plugin_error', 'cannot call this.use() without db');
+            logger.crash('plugin_mongodb_error', 'cannot call this.use() without db');
         } else {
-            logger.crash('mongodb_plugin_error', 'cannot call this.use() without db and collection');
+            logger.crash('plugin_mongodb_error', 'cannot call this.use() without db and collection');
         }
         return options;
     }
     
     get dbName() {
         if (!this.options.db) {
-            this.logger.crash('mongodb_plugin_error', 'this._db is undefined');
+            this.logger.crash('plugin_mongodb_error', 'this._db is undefined');
         }
         return this.options.db;
     }
     
     get collectionName() {
         if (!this.options.collection) {
-            this.logger.crash('mongodb_plugin_error', 'this._collection is undefined');
+            this.logger.crash('plugin_mongodb_error', 'this._collection is undefined');
         }
         return this.options.collection;
     }
@@ -149,7 +149,7 @@ class MongoDB {
     get namespace() {
         const {db, collection} = this.options;
         if (!db || !collection) {
-            this.logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
+            this.logger.crash('plugin_mongodb_error', 'this._db or this._collection is undefined');
         }
         return `${db}.${collection}`;
     }
@@ -157,7 +157,7 @@ class MongoDB {
     get namespaceObject() {
         const {db, collection} = this.options;
         if (!db || !collection) {
-            this.logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
+            this.logger.crash('plugin_mongodb_error', 'this._db or this._collection is undefined');
         }
         return {db, coll: collection};
     }
@@ -291,7 +291,6 @@ class MongoDB {
         }
         if (errors.length > 0) {
             const [error] = errors;
-            state.errors = [];
             throw error;
         }
         if (debug || this.options.otherOptions.debug) {
@@ -326,13 +325,6 @@ class MongoDB {
         }
         let state = get(this._state, key);
         if (!state) return;
-        if (!state.flushing) {
-            state.flushing = this._operateFlush(state).finally(() => delete state.flushing);
-        }
-        await state.flushing;
-    }
-
-    async _operateFlush(state) {
         const running = Object.values(state.running);
         if (running.length > 0) {
             await Promise.all(running);
@@ -372,23 +364,23 @@ class MongoDB {
         logger = logger || this.logger;
         const {db, collection} = this.options;
         if (!db || !collection) {
-            logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
+            logger.crash('plugin_mongodb_error', 'this._db or this._collection is undefined');
         }
         if (!operations) {
-            logger.crash('mongodb_plugin_error', 'operation must be provided!');
+            logger.crash('plugin_mongodb_error', 'operation must be provided!');
         }
         if (!Array.isArray(operations)) operations = [operations];
-        if (operations.length <= 0) return ;
+        if (operations.length <= 0) return;
         options = {...this.options.bulkOptions, ...options};
         let context = get(this._state, ['bulk', getJobId(logger), db, collection]);
         if (!context) {
             context = {operations: [], running: {}, errors: [], result: {}};
             setWith(this._state, ['bulk', getJobId(logger), db, collection], context, Object);
         }
+        while (context.committing) {
+            await context.committing;
+        }
         while (context.operations.length >= options.batchSize) {
-            if (context.flushing) {
-                await context.flushing;
-            }
             if (!context.committing) {
                 context.committing = this._bulkCommit(logger, context, options).finally(() => delete context.committing);
             }
@@ -401,6 +393,7 @@ class MongoDB {
         logger = logger || this.logger;
         const opId = uuid4();
         const {operations, running, errors, result} = context;
+        if (operations.length <= 0) return;
         while (Object.keys(running).length >= concurrency) {
             if (debug || this.options.otherOptions.debug) {
                 logger.debug(
@@ -412,8 +405,6 @@ class MongoDB {
         }
         if (errors.length > 0) {
             const [error] = errors;
-            context.errors = [];
-            context.result = {};
             throw error;
         }
         if (debug || this.options.otherOptions.debug) {
@@ -447,24 +438,14 @@ class MongoDB {
         logger = logger || this.logger;
         const {db, collection} = this.options;
         if (!db || !collection) {
-            logger.crash('mongodb_plugin_error', 'this._db or this._collection is undefined');
+            logger.crash('plugin_mongodb_error', 'this._db or this._collection is undefined');
         }
         const context = get(this._state, ['bulk', getJobId(logger), db, collection]);
         if (!context) return {};
-        if (!context.flushing) {
-            options = {...this.options.bulkOptions, ...options};
-            context.flushing = this._bulkFlush(logger, context, options).finally(() => delete context.flushing);
-        }
-        return await context.flushing;
-    }
-
-    async _bulkFlush(logger, context, options) {
-        logger = logger || this.logger;
-        while (context.committing) {
-            await context.committing;
-        }
         if (context.operations.length > 0) {
-            context.committing = this._bulkCommit(logger, context, options).finally(() => delete context.committing);
+            if (!context.committing) {
+                context.committing = this._bulkCommit(logger, context, options).finally(() => delete context.committing);
+            }
             await context.committing;
         }
         const running = Object.values(context.running);
@@ -474,9 +455,10 @@ class MongoDB {
         if (context.errors.length > 0) {
             const [error] = context.errors;
             context.errors = [];
+            context.result = {};
             throw error;
         }
-        const result = context.result;
+        const {result} = context;
         context.result = {};
         return result;
     }
@@ -551,7 +533,7 @@ class MongoDB {
         logger = logger || this.logger;
         const {db} = this.options;
         if (!db) {
-            logger.crash('mongodb_plugin_error', 'this._db is undefined');
+            logger.crash('plugin_mongodb_error', 'this._db is undefined');
         }
         const client = await this._getClient();
         return client.db(db);
@@ -561,7 +543,7 @@ class MongoDB {
         logger = logger || this.logger;
         const {db, collection} = this.options;
         if (!db || !collection) {
-            logger.crash('mongodb_plugin_error', 'this.options.db or this.options.collection is undefined');
+            logger.crash('plugin_mongodb_error', 'this.options.db or this.options.collection is undefined');
         }
         let coll = get(this._state, ['pool', db, collection]);
         if (!coll) {
@@ -684,7 +666,7 @@ class MongoDB {
                             return receiver;
                         };
                     default:
-                        logger.crash('mongodb_plugin_error', 'method "', p, '" on cursor is not supported in mongodb plugin');
+                        logger.crash('plugin_mongodb_error', 'method "', p, '" on cursor is not supported in mongodb plugin');
                 }
             }
         });
