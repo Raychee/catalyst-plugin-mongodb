@@ -505,6 +505,18 @@ class MongoDB {
         );
     }
 
+    dropIndex(logger, indexName, options = {}) {
+        logger = logger || this.logger;
+        const {debug, ...opts} = options;
+        if (debug || this.options.otherOptions.debug) {
+            const {db, collection} = this.options;
+            logger.debug('mongodb.use(', db, ', ', collection, ').dropIndex(', indexName, ', ', opts, ');');
+        }
+        return this._handlePromise(
+            logger, this._getCollection(logger).then(coll => coll.dropIndex(indexName, opts))
+        );
+    }
+
     watch(logger, pipeline, options) {
         logger = logger || this.logger;
         const {debug, ...opts} = options;
